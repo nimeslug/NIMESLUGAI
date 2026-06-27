@@ -14,7 +14,7 @@ A bilingual (Turkish & English) personal AI assistant specialized in personal fi
 ## 🛠️ Tech Stack
 
 - **Language:** Python 3.10+
-- **LLM:** Llama 3.3 70B (via Groq API — free tier)
+- **LLM:** GPT-OSS 120B (via Groq API — free tier)
 - **UI:** Streamlit *(coming soon)*
 - **Voice:** Whisper + Piper TTS *(coming soon)*
 - **Agents:** LangGraph *(coming soon)*
