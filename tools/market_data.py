@@ -1,6 +1,6 @@
 """
 Market data tools for Nimeslug.
-Fetches real-time prices for stocks, crypto, and forex.
+Fetches real-time prices and historical data for stocks, crypto, and forex.
 """
 
 import yfinance as yf
@@ -15,15 +15,7 @@ cg = CoinGeckoAPI()
 # ─── STOCKS & FOREX (via Yahoo Finance) ──────────────────────
 
 def get_stock_price(ticker: str) -> dict:
-    """
-    Get current stock price and basic info.
-    
-    Args:
-        ticker: Stock symbol (e.g., 'AAPL', 'TSLA', 'THYAO.IS' for BIST)
-    
-    Returns:
-        dict with price, change, currency, etc.
-    """
+    """Get current stock price and basic info."""
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -52,16 +44,7 @@ def get_stock_price(ticker: str) -> dict:
 
 
 def get_forex_rate(pair: str) -> dict:
-    """
-    Get forex exchange rate.
-    
-    Args:
-        pair: Currency pair (e.g., 'USDTRY', 'EURUSD')
-    
-    Returns:
-        dict with rate and change info
-    """
-    # Yahoo Finance uses 'USDTRY=X' format
+    """Get forex exchange rate."""
     ticker = f"{pair.upper()}=X"
     result = get_stock_price(ticker)
     
@@ -75,16 +58,7 @@ def get_forex_rate(pair: str) -> dict:
 # ─── CRYPTO (via CoinGecko) ──────────────────────────────────
 
 def get_crypto_price(coin_id: str, vs_currency: str = "usd") -> dict:
-    """
-    Get current cryptocurrency price.
-    
-    Args:
-        coin_id: CoinGecko ID (e.g., 'bitcoin', 'ethereum', 'solana')
-        vs_currency: Currency to quote in ('usd', 'eur', 'try')
-    
-    Returns:
-        dict with price, 24h change, market cap, etc.
-    """
+    """Get current cryptocurrency price."""
     try:
         data = cg.get_price(
             ids=coin_id.lower(),
@@ -113,7 +87,50 @@ def get_crypto_price(coin_id: str, vs_currency: str = "usd") -> dict:
         return {"error": f"Failed to fetch crypto '{coin_id}': {str(e)}"}
 
 
-# ─── HISTORICAL DATA (for charts) ────────────────────────────
+def get_crypto_history(coin_id: str, days: int = 30, vs_currency: str = "usd") -> dict:
+    """
+    Get historical cryptocurrency price data for charting.
+    
+    Args:
+        coin_id: CoinGecko ID (e.g., 'bitcoin', 'ethereum', 'solana')
+        days: Number of days back (1, 7, 14, 30, 90, 180, 365)
+        vs_currency: Quote currency ('usd', 'eur', 'try')
+    
+    Returns:
+        dict with raw [timestamp_ms, price] pairs and summary metadata
+    """
+    try:
+        data = cg.get_coin_market_chart_by_id(
+            id=coin_id.lower(),
+            vs_currency=vs_currency.lower(),
+            days=days,
+        )
+        
+        if not data or "prices" not in data or not data["prices"]:
+            return {"error": f"No history found for '{coin_id}'"}
+        
+        prices = data["prices"]  # list of [timestamp_ms, price]
+        start_price = prices[0][1]
+        end_price = prices[-1][1]
+        change_pct = ((end_price - start_price) / start_price) * 100 if start_price else 0
+        
+        return {
+            "coin": coin_id.lower(),
+            "currency": vs_currency.upper(),
+            "days": days,
+            "prices": prices,
+            "summary": {
+                "start_price": round(start_price, 2),
+                "end_price": round(end_price, 2),
+                "change_pct": round(change_pct, 2),
+                "data_points": len(prices),
+            },
+        }
+    except Exception as e:
+        return {"error": f"Failed to fetch crypto history: {str(e)}"}
+
+
+# ─── HISTORICAL DATA (for stocks/forex charts) ───────────────
 
 def get_price_history(ticker: str, period: str = "1mo") -> dict:
     """
@@ -163,3 +180,13 @@ if __name__ == "__main__":
         print(f"Ticker: {history['ticker']}")
         for date, price in zip(history["dates"][:5], history["prices"][:5]):
             print(f"  {date}: ${price}")
+    print()
+    
+    print("📈 Bitcoin 30-day history (summary):")
+    btc_history = get_crypto_history("bitcoin", days=30)
+    if "error" not in btc_history:
+        s = btc_history["summary"]
+        print(f"  Start: ${s['start_price']} → End: ${s['end_price']}")
+        print(f"  Change: {s['change_pct']:+.2f}%  ({s['data_points']} data points)")
+    else:
+        print(f"  Error: {btc_history['error']}")
