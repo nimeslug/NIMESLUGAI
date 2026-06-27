@@ -1,7 +1,8 @@
 """
-Nimeslug — Streamlit Chat Interface with Tool Use & Charts
+Nimeslug — Streamlit Chat Interface with Tool Use, Charts & RAG
 Bilingual (TR/EN) personal finance & economics AI assistant
-with real-time market data and interactive visualizations.
+with real-time market data, interactive visualizations, and
+a personal knowledge base (RAG).
 """
 
 import json
@@ -17,6 +18,13 @@ from tools.market_data import (
     get_crypto_history,
 )
 from tools.charts import create_price_chart, create_crypto_chart
+from tools.rag import (
+    search_knowledge_base,
+    index_all_pdfs,
+    get_kb_stats,
+    clear_knowledge_base,
+    KNOWLEDGE_BASE_DIR,
+)
 
 
 # ─── Page Configuration ──────────────────────────────────────
@@ -157,6 +165,34 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": (
+                "Search the user's personal knowledge base of finance and economics "
+                "documents (books, papers, articles they uploaded). Use this when the "
+                "user asks about specific concepts, theories, authors, or wants insight "
+                "based on their own reference material. Always cite the source document "
+                "and page in your answer (e.g., 'According to filename.pdf page X...')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query — what concept or question to look up",
+                    },
+                    "n_results": {
+                        "type": "integer",
+                        "description": "Number of top results (default 4)",
+                        "default": 4,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -167,6 +203,7 @@ TOOL_FUNCTIONS = {
     "get_crypto_price": get_crypto_price,
     "get_price_history": get_price_history,
     "get_crypto_history": get_crypto_history,
+    "search_knowledge_base": search_knowledge_base,
 }
 
 
@@ -199,7 +236,6 @@ def execute_tool(tool_call) -> tuple[str, dict]:
     result = TOOL_FUNCTIONS[function_name](**function_args)
     
     # For heavy history tools, send only a compact summary to the LLM
-    # (we keep the full data locally for chart rendering)
     if function_name == "get_crypto_history" and "error" not in result:
         compact = {
             "coin": result["coin"],
@@ -234,7 +270,7 @@ def execute_tool(tool_call) -> tuple[str, dict]:
             }
             return json.dumps(compact, default=str), result
     
-    # For other tools (current price, forex), send full result (it's small)
+    # For other tools (current price, forex, RAG), send full result
     return json.dumps(result, default=str), result
 
 
@@ -242,9 +278,6 @@ def execute_tool(tool_call) -> tuple[str, dict]:
 def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]:
     """
     Run a chat completion with a tool-use loop.
-    
-    The LLM may call multiple tools across several turns before composing
-    a final answer. We loop up to `max_iterations` times to handle this.
     
     Returns:
         (final_answer, used_tools_info)
@@ -321,10 +354,7 @@ def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]
 
 # ─── Chart Builder ───────────────────────────────────────────
 def build_charts_from_tools(used_tools: list) -> list:
-    """
-    Inspect used tools and build a Plotly figure for any history results.
-    Returns a list of Plotly Figure objects (possibly empty).
-    """
+    """Build Plotly figures for any history results in used tools."""
     charts = []
     for tool in used_tools:
         try:
@@ -344,14 +374,14 @@ def build_charts_from_tools(used_tools: list) -> list:
                     )
                 )
         except (json.JSONDecodeError, KeyError, TypeError):
-            pass  # Skip malformed results silently
+            pass
     
     return charts
 
 
 # ─── UI ──────────────────────────────────────────────────────
 st.title("🤖 Nimeslug")
-st.caption("Your bilingual AI assistant for personal finance & economics — now with live market data")
+st.caption("Your bilingual AI assistant for personal finance & economics — with market data and your own knowledge base")
 
 
 # ─── Sidebar ─────────────────────────────────────────────────
@@ -359,7 +389,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
     st.markdown(f"**Model:** `{LLM_MODEL}`")
     st.markdown("**Language:** Auto (TR/EN)")
-    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts")
+    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts · 📚 RAG")
     st.markdown(f"**Context window:** Last {MAX_HISTORY_MESSAGES} messages")
     
     st.divider()
@@ -367,6 +397,49 @@ with st.sidebar:
     if st.button("🗑️ Clear conversation", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
+    
+    st.divider()
+    
+    # ─── Knowledge Base Management ──────────────────────
+    st.markdown("### 📚 Knowledge Base")
+    
+    stats = get_kb_stats()
+    if stats.get("total_chunks", 0) > 0:
+        st.success(
+            f"📖 {stats['total_sources']} document(s) · "
+            f"{stats['total_chunks']} chunks indexed"
+        )
+        with st.expander("📂 Sources"):
+            for src in stats.get("sources", []):
+                st.markdown(f"- `{src}`")
+    else:
+        st.info(
+            f"No documents indexed yet. Drop PDFs into the "
+            f"`{KNOWLEDGE_BASE_DIR}/` folder and click Re-index."
+        )
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Re-index", use_container_width=True):
+            with st.spinner("Indexing PDFs... (first run downloads embedding model ~80MB)"):
+                results = index_all_pdfs()
+                if not results:
+                    st.warning("No PDFs found in knowledge_base/")
+                else:
+                    for r in results:
+                        if "error" in r:
+                            st.error(f"❌ {r['error']}")
+                        else:
+                            st.success(
+                                f"✅ {r['file']} ({r['pages']}p, {r['chunks']} chunks)"
+                            )
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Clear KB", use_container_width=True):
+            clear_knowledge_base()
+            st.success("Knowledge base cleared")
+            st.rerun()
     
     st.divider()
     
@@ -378,7 +451,8 @@ with st.sidebar:
         - Dolar TL kuru kaç?
         - Bitcoin son 30 günü nasıl?
         - Show me Tesla's last 3 months
-        - Compare Tesla and Apple this month
+        - Yüklediğim dokümanda enflasyon nasıl tanımlanıyor?
+        - What does the document say about interest rates?
         - Enflasyon nedir kısaca anlat
         """
     )
