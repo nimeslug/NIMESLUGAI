@@ -1,34 +1,41 @@
+"""
+Nimeslug — Bilingual AI Assistant
+Quick test: send a question, get a response.
+"""
+
 from groq import Groq
 from config import GROQ_API_KEY, LLM_MODEL, SYSTEM_PROMPT
 
 
-def soru_sor(soru: str) -> str:
-    """Nimeslug'a soru sorar, cevabı döndürür."""
+def ask(question: str) -> str:
+    """Send a question to Nimeslug and return the answer."""
     client = Groq(api_key=GROQ_API_KEY)
     
-    mesajlar = [
+    messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": soru},
+        {"role": "user", "content": question},
     ]
     
-    cevap = client.chat.completions.create(
+    response = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=mesajlar,
+        messages=messages,
         temperature=0.7,
         max_tokens=1024,
     )
     
-    return cevap.choices[0].message.content
+    return response.choices[0].message.content
 
 
 if __name__ == "__main__":
-    print("🤖 Nimeslug başlatılıyor...\n")
+    print("🤖 Nimeslug starting...\n")
     
-    test_sorusu = "Merhaba Nimeslug! Kendini tanıt ve enflasyon nedir kısaca anlat."
+    # Test 1: Turkish
+    tr_question = "Merhaba! Kendini tanıt ve enflasyon nedir kısaca anlat."
+    print(f"👤 User (TR): {tr_question}\n")
+    print(f"🤖 Nimeslug: {ask(tr_question)}\n")
+    print("-" * 60 + "\n")
     
-    print(f"👤 Sen: {test_sorusu}\n")
-    print("🤖 Nimeslug düşünüyor...\n")
-    
-    cevap = soru_sor(test_sorusu)
-    
-    print(f"🤖 Nimeslug: {cevap}\n")
+    # Test 2: English
+    en_question = "Hello! Introduce yourself and briefly explain what inflation is."
+    print(f"👤 User (EN): {en_question}\n")
+    print(f"🤖 Nimeslug: {ask(en_question)}\n")
