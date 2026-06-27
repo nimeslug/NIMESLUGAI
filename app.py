@@ -26,6 +26,7 @@ from tools.rag import (
     KNOWLEDGE_BASE_DIR,
 )
 
+from tools.voice import transcribe_audio, detect_language
 
 # ─── Page Configuration ──────────────────────────────────────
 st.set_page_config(
@@ -351,6 +352,55 @@ def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]
     
     return final_response.choices[0].message.content or "", used_tools
 
+# ─── Browser TTS Helper ──────────────────────────────────────
+def speak_in_browser(text: str, lang: str = "en") -> None:
+    """
+    Use the browser's built-in speechSynthesis API to read text aloud.
+    Free, no external service, supports Turkish and English.
+    
+    Args:
+        text: The text to speak
+        lang: 'tr' for Turkish, 'en' for English
+    """
+    # Escape backticks, backslashes, and newlines for safe JS string
+    safe_text = (
+        text.replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+    voice_lang = "tr-TR" if lang == "tr" else "en-US"
+    
+    # Generate a unique ID so re-runs don't reuse the same script tag
+    import uuid
+    component_id = f"tts-{uuid.uuid4().hex[:8]}"
+    
+    html = f"""
+    <div id="{component_id}"></div>
+    <script>
+        (function() {{
+            if (!window.speechSynthesis) return;
+            
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel();
+            
+            const utterance = new SpeechSynthesisUtterance(`{safe_text}`);
+            utterance.lang = "{voice_lang}";
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
+            
+            // Pick a matching voice if available
+            const voices = window.speechSynthesis.getVoices();
+            const match = voices.find(v => v.lang.startsWith("{voice_lang}".substring(0, 2)));
+            if (match) utterance.voice = match;
+            
+            window.speechSynthesis.speak(utterance);
+        }})();
+    </script>
+    """
+    st.components.v1.html(html, height=0)
+
 
 # ─── Chart Builder ───────────────────────────────────────────
 def build_charts_from_tools(used_tools: list) -> list:
@@ -389,8 +439,24 @@ with st.sidebar:
     st.header("⚙️ Settings")
     st.markdown(f"**Model:** `{LLM_MODEL}`")
     st.markdown("**Language:** Auto (TR/EN)")
-    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts · 📚 RAG")
+    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts · 📚 RAG · 🎙️ Voice")
     st.markdown(f"**Context window:** Last {MAX_HISTORY_MESSAGES} messages")
+    
+    st.divider()
+
+    # ─── Voice Mode ─────────────────────────────────────
+    st.markdown("### 🎙️ Voice Mode")
+    
+    if "voice_mode" not in st.session_state:
+        st.session_state.voice_mode = False
+    
+    st.session_state.voice_mode = st.toggle(
+        "Enable voice output (TTS)",
+        value=st.session_state.voice_mode,
+        help="Reads Nimeslug's responses aloud using your browser's voice.",
+    )
+    
+    st.caption("💡 Speak by clicking the 🎤 button below the chat input")
     
     st.divider()
     
@@ -471,9 +537,39 @@ for msg in st.session_state.messages:
             for chart in msg["charts"]:
                 st.plotly_chart(chart, use_container_width=True)
 
+# ─── Voice Input (Mic) ───────────────────────────────────────
+st.markdown("##### 🎤 Or speak your question")
+audio_value = st.audio_input(
+    "Tap to record",
+    label_visibility="collapsed",
+    key="voice_recorder",
+)
+
+# If a new recording arrived, transcribe and inject it as a prompt
+voice_prompt = None
+if audio_value is not None:
+    audio_bytes = audio_value.getvalue()
+    # Only process if it's a new, non-empty recording
+    if audio_bytes and audio_bytes != st.session_state.get("last_audio_bytes"):
+        st.session_state.last_audio_bytes = audio_bytes
+        with st.spinner("🎙️ Transcribing..."):
+            transcription = transcribe_audio(audio_bytes)
+        
+        if "error" in transcription:
+            st.error(f"❌ {transcription['error']}")
+        elif transcription.get("text"):
+            voice_prompt = transcription["text"]
+            st.success(f"🎤 You said: *{voice_prompt}*")
+        else:
+            st.warning("Couldn't understand the audio. Try again?")
 
 # ─── Chat Input ──────────────────────────────────────────────
-if prompt := st.chat_input("Ask me anything about finance, markets, or economics..."):
+text_prompt = st.chat_input("Ask me anything about finance, markets, or economics...")
+
+# Use either voice or text input (whichever just arrived)
+prompt = voice_prompt or text_prompt
+
+if prompt:
     # Save and display user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -502,6 +598,10 @@ if prompt := st.chat_input("Ask me anything about finance, markets, or economics
                     for tool in used_tools:
                         st.markdown(f"**{tool['name']}**")
                         st.code(tool["args"], language="json")
+            
+            # Speak the response if voice mode is on
+            if st.session_state.get("voice_mode"):
+                speak_in_browser(answer, lang=detect_language(answer))
     
     # Save the assistant's answer + any charts to history
     st.session_state.messages.append({
