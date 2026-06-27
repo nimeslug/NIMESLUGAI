@@ -75,6 +75,17 @@ IMPORTANT RULES:
 - Always frame financial discussions as educational information.
 - If asked for predictions, explain that markets are uncertain and offer scenarios instead.
 - Cite uncertainty when relevant; do not fabricate numbers or statistics.
+
+- BUDGET TRACKING: Use add_transaction when the user mentions spending or income.
+  Examples: "Bugün markete 450 TL harcadım" → add_transaction(amount=450, category="Market", 
+  description="market alışverişi", transaction_type="expense"). "Maaşım 25000 TL geldi" → 
+  add_transaction(amount=25000, category="Maaş", transaction_type="income"). Extract the 
+  amount carefully and infer the most fitting category from the description. After recording, 
+  confirm to the user briefly.
+- BUDGET QUERIES: Use get_summary when the user asks about their spending patterns 
+  ("Bu ay ne kadar harcadım?", "Show my weekly summary"). A chart will be rendered 
+  automatically. In your text response, highlight key insights: total spending, top 
+  category, income vs expense balance.
 """
 
 # Validation

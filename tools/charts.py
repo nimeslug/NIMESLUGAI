@@ -122,3 +122,86 @@ def create_crypto_chart(coin_id: str, prices_data: list, currency: str = "USD") 
     }
     
     return create_price_chart(history_data)
+
+def create_category_pie_chart(by_category: dict, title: str = "Spending by Category") -> go.Figure:
+    """
+    Pie chart of spending breakdown by category.
+    
+    Args:
+        by_category: dict mapping category name → amount
+        title: Chart title
+    """
+    if not by_category:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No spending data yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16),
+        )
+        return fig
+    
+    labels = list(by_category.keys())
+    values = list(by_category.values())
+    
+    fig = go.Figure(data=[
+        go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.4,
+            textinfo="label+percent",
+            hovertemplate="<b>%{label}</b><br>%{value:,.2f}<br>%{percent}<extra></extra>",
+        )
+    ])
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=18)),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=400,
+        showlegend=True,
+    )
+    
+    return fig
+
+
+def create_category_bar_chart(by_category: dict, title: str = "Spending by Category") -> go.Figure:
+    """
+    Horizontal bar chart of spending by category.
+    """
+    if not by_category:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No spending data yet",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=16),
+        )
+        return fig
+    
+    # Sort by amount (ascending for horizontal bars, so largest appears on top)
+    sorted_items = sorted(by_category.items(), key=lambda x: x[1])
+    labels = [k for k, _ in sorted_items]
+    values = [v for _, v in sorted_items]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker=dict(color="#26a69a"),
+            hovertemplate="<b>%{y}</b><br>%{x:,.2f}<extra></extra>",
+        )
+    ])
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=18)),
+        xaxis=dict(title="Amount", showgrid=True, gridcolor="rgba(128,128,128,0.15)"),
+        yaxis=dict(title=None),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=max(300, len(labels) * 35),
+        showlegend=False,
+    )
+    
+    return fig

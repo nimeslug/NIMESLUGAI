@@ -1,8 +1,11 @@
 """
-Nimeslug — Streamlit Chat Interface with Tool Use, Charts & RAG
-Bilingual (TR/EN) personal finance & economics AI assistant
-with real-time market data, interactive visualizations, and
-a personal knowledge base (RAG).
+Nimeslug — Streamlit Chat Interface with Tool Use, Charts, RAG, Voice & Budget
+Bilingual (TR/EN) personal finance & economics AI assistant with:
+- Real-time market data
+- Interactive visualizations
+- Personal knowledge base (RAG)
+- Voice interaction (Jarvis mode)
+- Personal budget tracking
 """
 
 import json
@@ -17,7 +20,12 @@ from tools.market_data import (
     get_price_history,
     get_crypto_history,
 )
-from tools.charts import create_price_chart, create_crypto_chart
+from tools.charts import (
+    create_price_chart,
+    create_crypto_chart,
+    create_category_pie_chart,
+    create_category_bar_chart,
+)
 from tools.rag import (
     search_knowledge_base,
     index_all_pdfs,
@@ -25,8 +33,16 @@ from tools.rag import (
     clear_knowledge_base,
     KNOWLEDGE_BASE_DIR,
 )
-
 from tools.voice import transcribe_audio, detect_language
+from tools.budget import (
+    add_transaction,
+    get_summary,
+    get_all_transactions,
+    delete_transaction,
+    clear_all_transactions,
+    CATEGORIES,
+)
+
 
 # ─── Page Configuration ──────────────────────────────────────
 st.set_page_config(
@@ -194,6 +210,76 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_transaction",
+            "description": (
+                "Record a new financial transaction (expense or income) in the user's "
+                "personal budget tracker. Use this when the user mentions spending money "
+                "or receiving income (e.g., 'Bugün markete 450 TL harcadım', 'I spent $20 "
+                "on coffee', 'Maaşım 25000 TL geldi'). Extract the amount, infer the "
+                "category, and confirm the recording in your response."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "number",
+                        "description": "Transaction amount (positive number)",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": (
+                            f"Category. Use one of: {', '.join(CATEGORIES)}. "
+                            "Pick the closest match based on the description."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Brief description of what the transaction was for",
+                    },
+                    "currency": {
+                        "type": "string",
+                        "description": "Currency code: TRY, USD, EUR (default TRY)",
+                        "default": "TRY",
+                    },
+                    "transaction_type": {
+                        "type": "string",
+                        "description": "'expense' or 'income'",
+                        "default": "expense",
+                    },
+                },
+                "required": ["amount", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_summary",
+            "description": (
+                "Get a summary of the user's budget for a given period. Returns totals, "
+                "category breakdown, and recent transactions. Use when the user asks "
+                "about their spending, e.g., 'Bu ay ne kadar harcadım?', 'Show my "
+                "weekly summary', 'En çok hangi kategoride harcıyorum?'. A pie chart "
+                "is rendered automatically when category data is available."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "period": {
+                        "type": "string",
+                        "description": (
+                            "Time window: 'today', 'week', 'month', 'year', 'all'. "
+                            "Default 'month'."
+                        ),
+                        "default": "month",
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -205,6 +291,8 @@ TOOL_FUNCTIONS = {
     "get_price_history": get_price_history,
     "get_crypto_history": get_crypto_history,
     "search_knowledge_base": search_knowledge_base,
+    "add_transaction": add_transaction,
+    "get_summary": get_summary,
 }
 
 
@@ -271,18 +359,13 @@ def execute_tool(tool_call) -> tuple[str, dict]:
             }
             return json.dumps(compact, default=str), result
     
-    # For other tools (current price, forex, RAG), send full result
+    # For other tools, send full result
     return json.dumps(result, default=str), result
 
 
 # ─── Main Chat Function ──────────────────────────────────────
 def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]:
-    """
-    Run a chat completion with a tool-use loop.
-    
-    Returns:
-        (final_answer, used_tools_info)
-    """
+    """Run a chat completion with a tool-use loop."""
     used_tools = []
     
     for iteration in range(max_iterations):
@@ -297,11 +380,9 @@ def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]
         
         response_msg = response.choices[0].message
         
-        # No tool call → we're done
         if not response_msg.tool_calls:
             return response_msg.content or "", used_tools
         
-        # Add the assistant message containing the tool calls
         messages.append({
             "role": "assistant",
             "content": response_msg.content or "",
@@ -318,21 +399,20 @@ def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]
             ],
         })
         
-        # Execute each tool call
         for tool_call in response_msg.tool_calls:
             llm_payload, full_result = execute_tool(tool_call)
             used_tools.append({
                 "name": tool_call.function.name,
                 "args": tool_call.function.arguments,
-                "result": json.dumps(full_result, default=str),  # full data → for charts
+                "result": json.dumps(full_result, default=str),
             })
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
-                "content": llm_payload,  # compact data → for LLM
+                "content": llm_payload,
             })
     
-    # Iteration limit reached: force a final summary without tools
+    # Iteration limit reached: force a final summary
     final_response = client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages
@@ -352,17 +432,10 @@ def chat_with_tools(messages: list, max_iterations: int = 5) -> tuple[str, list]
     
     return final_response.choices[0].message.content or "", used_tools
 
+
 # ─── Browser TTS Helper ──────────────────────────────────────
 def speak_in_browser(text: str, lang: str = "en") -> None:
-    """
-    Use the browser's built-in speechSynthesis API to read text aloud.
-    Free, no external service, supports Turkish and English.
-    
-    Args:
-        text: The text to speak
-        lang: 'tr' for Turkish, 'en' for English
-    """
-    # Escape backticks, backslashes, and newlines for safe JS string
+    """Use the browser's speechSynthesis API to read text aloud."""
     safe_text = (
         text.replace("\\", "\\\\")
         .replace("`", "\\`")
@@ -371,7 +444,6 @@ def speak_in_browser(text: str, lang: str = "en") -> None:
     )
     voice_lang = "tr-TR" if lang == "tr" else "en-US"
     
-    # Generate a unique ID so re-runs don't reuse the same script tag
     import uuid
     component_id = f"tts-{uuid.uuid4().hex[:8]}"
     
@@ -380,8 +452,6 @@ def speak_in_browser(text: str, lang: str = "en") -> None:
     <script>
         (function() {{
             if (!window.speechSynthesis) return;
-            
-            // Cancel any ongoing speech
             window.speechSynthesis.cancel();
             
             const utterance = new SpeechSynthesisUtterance(`{safe_text}`);
@@ -390,7 +460,6 @@ def speak_in_browser(text: str, lang: str = "en") -> None:
             utterance.pitch = 1.0;
             utterance.volume = 1.0;
             
-            // Pick a matching voice if available
             const voices = window.speechSynthesis.getVoices();
             const match = voices.find(v => v.lang.startsWith("{voice_lang}".substring(0, 2)));
             if (match) utterance.voice = match;
@@ -404,7 +473,7 @@ def speak_in_browser(text: str, lang: str = "en") -> None:
 
 # ─── Chart Builder ───────────────────────────────────────────
 def build_charts_from_tools(used_tools: list) -> list:
-    """Build Plotly figures for any history results in used tools."""
+    """Build Plotly figures for any tool results that warrant a chart."""
     charts = []
     for tool in used_tools:
         try:
@@ -423,6 +492,17 @@ def build_charts_from_tools(used_tools: list) -> list:
                         currency=result["currency"],
                     )
                 )
+            
+            elif tool["name"] == "get_summary":
+                by_category = result.get("by_category", {})
+                if by_category:
+                    period_label = result.get("period", "month").capitalize()
+                    charts.append(
+                        create_category_pie_chart(
+                            by_category,
+                            title=f"{period_label} — Spending by Category",
+                        )
+                    )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
     
@@ -431,7 +511,7 @@ def build_charts_from_tools(used_tools: list) -> list:
 
 # ─── UI ──────────────────────────────────────────────────────
 st.title("🤖 Nimeslug")
-st.caption("Your bilingual AI assistant for personal finance & economics — with market data and your own knowledge base")
+st.caption("Your bilingual AI assistant for personal finance & economics — with market data, knowledge base, voice, and budget tracking")
 
 
 # ─── Sidebar ─────────────────────────────────────────────────
@@ -439,11 +519,11 @@ with st.sidebar:
     st.header("⚙️ Settings")
     st.markdown(f"**Model:** `{LLM_MODEL}`")
     st.markdown("**Language:** Auto (TR/EN)")
-    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts · 📚 RAG · 🎙️ Voice")
+    st.markdown("**Tools:** 📈 Stocks · 💰 Forex · ₿ Crypto · 📊 Charts · 📚 RAG · 🎙️ Voice · 💸 Budget")
     st.markdown(f"**Context window:** Last {MAX_HISTORY_MESSAGES} messages")
     
     st.divider()
-
+    
     # ─── Voice Mode ─────────────────────────────────────
     st.markdown("### 🎙️ Voice Mode")
     
@@ -462,6 +542,32 @@ with st.sidebar:
     
     if st.button("🗑️ Clear conversation", use_container_width=True):
         st.session_state.messages = []
+        st.rerun()
+    
+    st.divider()
+    
+    # ─── Budget Management ──────────────────────────────
+    st.markdown("### 💰 Budget")
+    
+    summary = get_summary("month")
+    if "error" not in summary and summary.get("transaction_count", 0) > 0:
+        exp = summary["total_expense"]
+        inc = summary["total_income"]
+        net = summary["net"]
+        net_emoji = "💚" if net >= 0 else "❤️"
+        st.markdown(
+            f"**This month:**  \n"
+            f"📤 Expense: `{exp:,.2f} TRY`  \n"
+            f"📥 Income: `{inc:,.2f} TRY`  \n"
+            f"{net_emoji} Net: `{net:,.2f} TRY`"
+        )
+        st.caption(f"{summary['transaction_count']} transaction(s) this month")
+    else:
+        st.info("No transactions yet. Tell Nimeslug what you spent!")
+    
+    if st.button("🗑️ Clear all budget data", use_container_width=True):
+        clear_all_transactions()
+        st.success("Budget cleared")
         st.rerun()
     
     st.divider()
@@ -487,7 +593,7 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🔄 Re-index", use_container_width=True):
-            with st.spinner("Indexing PDFs... (first run downloads embedding model ~80MB)"):
+            with st.spinner("Indexing PDFs..."):
                 results = index_all_pdfs()
                 if not results:
                     st.warning("No PDFs found in knowledge_base/")
@@ -516,9 +622,11 @@ with st.sidebar:
         - What's the Bitcoin price right now?
         - Dolar TL kuru kaç?
         - Bitcoin son 30 günü nasıl?
-        - Show me Tesla's last 3 months
+        - Bugün markete 450 TL harcadım
+        - Maaşım 25000 TL geldi
+        - Bu ay ne kadar harcadım?
+        - Show my weekly budget summary
         - Yüklediğim dokümanda enflasyon nasıl tanımlanıyor?
-        - What does the document say about interest rates?
         - Enflasyon nedir kısaca anlat
         """
     )
@@ -537,6 +645,7 @@ for msg in st.session_state.messages:
             for chart in msg["charts"]:
                 st.plotly_chart(chart, use_container_width=True)
 
+
 # ─── Voice Input (Mic) ───────────────────────────────────────
 st.markdown("##### 🎤 Or speak your question")
 audio_value = st.audio_input(
@@ -549,7 +658,6 @@ audio_value = st.audio_input(
 voice_prompt = None
 if audio_value is not None:
     audio_bytes = audio_value.getvalue()
-    # Only process if it's a new, non-empty recording
     if audio_bytes and audio_bytes != st.session_state.get("last_audio_bytes"):
         st.session_state.last_audio_bytes = audio_bytes
         with st.spinner("🎙️ Transcribing..."):
@@ -562,6 +670,7 @@ if audio_value is not None:
             st.success(f"🎤 You said: *{voice_prompt}*")
         else:
             st.warning("Couldn't understand the audio. Try again?")
+
 
 # ─── Chat Input ──────────────────────────────────────────────
 text_prompt = st.chat_input("Ask me anything about finance, markets, or economics...")
@@ -578,7 +687,6 @@ if prompt:
     # Generate response
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            # Build API message list (text-only history, limited to recent N)
             api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
             recent_messages = st.session_state.messages[-MAX_HISTORY_MESSAGES:]
             for m in recent_messages:
