@@ -148,7 +148,7 @@ def index_all_pdfs(directory: Path = KNOWLEDGE_BASE_DIR) -> list[dict]:
 
 
 # ─── Search ──────────────────────────────────────────────────
-def search_knowledge_base(query: str, n_results: int = 4) -> dict:
+def search_knowledge_base(query: str, n_results: int = 3) -> dict:
     """
     Search the knowledge base semantically.
     
@@ -180,8 +180,12 @@ def search_knowledge_base(query: str, n_results: int = 4) -> dict:
         for i, doc in enumerate(results["documents"][0]):
             meta = results["metadatas"][0][i]
             distance = results["distances"][0][i] if results.get("distances") else None
+            # Truncate each chunk to ~500 chars to save tokens
+            text = doc.strip()
+            if len(text) > 500:
+                text = text[:500] + "..."
             snippets.append({
-                "text": doc,
+                "text": text,
                 "source": meta.get("source", "unknown"),
                 "page": meta.get("page", "?"),
                 "relevance": round(1 - distance, 3) if distance is not None else None,

@@ -202,8 +202,8 @@ TOOLS = [
                     },
                     "n_results": {
                         "type": "integer",
-                        "description": "Number of top results (default 4)",
-                        "default": 4,
+                        "description": "Number of top results (default 3, max 5)",
+                        "default": 3,
                     },
                 },
                 "required": ["query"],
@@ -358,6 +358,28 @@ def execute_tool(tool_call) -> tuple[str, dict]:
                 "note": "Full price series omitted to save tokens; chart is rendered separately for the user.",
             }
             return json.dumps(compact, default=str), result
+    
+    # For RAG, truncate each chunk and send only top-3 to the LLM
+    if function_name == "search_knowledge_base" and "error" not in result:
+        results_list = result.get("results", [])
+        compact_results = []
+        for r in results_list[:3]:  # Max 3 results
+            text = r.get("text", "")
+            # Truncate each chunk to ~400 chars to save tokens
+            if len(text) > 400:
+                text = text[:400] + "..."
+            compact_results.append({
+                "text": text,
+                "source": r.get("source"),
+                "page": r.get("page"),
+            })
+        compact = {
+            "query": result.get("query"),
+            "count": len(compact_results),
+            "results": compact_results,
+            "note": "Top results truncated for efficiency. Cite source and page in your answer.",
+        }
+        return json.dumps(compact, default=str), result
     
     # For other tools, send full result
     return json.dumps(result, default=str), result
