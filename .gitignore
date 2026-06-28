@@ -1,10 +1,34 @@
+data/*.db
+
+# Virtual env
 venv/
-.env
+env/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Secrets
+.env
+
+# Databases
 *.db
 *.sqlite
+data/
+
+# Vector store
 chroma_db/
+
+# User uploads
+knowledge_base/*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
 .vscode/
+
+# Logs
 *.log
-data/*.db

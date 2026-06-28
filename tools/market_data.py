@@ -1,21 +1,48 @@
 """
 Market data tools for Nimeslug.
 Fetches real-time prices and historical data for stocks, crypto, and forex.
+Includes in-memory caching to reduce API calls.
 """
 
+from datetime import datetime, timedelta
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
-from datetime import datetime
 
 
 # CoinGecko client (no API key needed for free tier)
 cg = CoinGeckoAPI()
 
 
+# ─── In-memory cache ─────────────────────────────────────────
+# Maps cache_key → (timestamp, result)
+_price_cache = {}
+CACHE_TTL_SECONDS = 60  # 1 minute
+
+
+def _get_cached(cache_key: str):
+    """Return cached value if still fresh, else None."""
+    if cache_key not in _price_cache:
+        return None
+    cached_at, value = _price_cache[cache_key]
+    if (datetime.now() - cached_at).total_seconds() < CACHE_TTL_SECONDS:
+        return value
+    return None
+
+
+def _set_cache(cache_key: str, value):
+    """Store value in cache with current timestamp."""
+    _price_cache[cache_key] = (datetime.now(), value)
+
+
 # ─── STOCKS & FOREX (via Yahoo Finance) ──────────────────────
 
 def get_stock_price(ticker: str) -> dict:
-    """Get current stock price and basic info."""
+    """Get current stock price and basic info (cached for 60s)."""
+    cache_key = f"stock:{ticker.upper()}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached
+    
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -29,7 +56,7 @@ def get_stock_price(ticker: str) -> dict:
         change = current_price - previous_close
         change_pct = (change / previous_close) * 100 if previous_close else 0
         
-        return {
+        result = {
             "ticker": ticker.upper(),
             "name": info.get("longName", ticker),
             "price": round(float(current_price), 2),
@@ -39,6 +66,8 @@ def get_stock_price(ticker: str) -> dict:
             "market_cap": info.get("marketCap"),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        _set_cache(cache_key, result)
+        return result
     except Exception as e:
         return {"error": f"Failed to fetch '{ticker}': {str(e)}"}
 
@@ -58,7 +87,12 @@ def get_forex_rate(pair: str) -> dict:
 # ─── CRYPTO (via CoinGecko) ──────────────────────────────────
 
 def get_crypto_price(coin_id: str, vs_currency: str = "usd") -> dict:
-    """Get current cryptocurrency price."""
+    """Get current cryptocurrency price (cached for 60s)."""
+    cache_key = f"crypto:{coin_id.lower()}:{vs_currency.lower()}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached
+    
     try:
         data = cg.get_price(
             ids=coin_id.lower(),
@@ -74,7 +108,7 @@ def get_crypto_price(coin_id: str, vs_currency: str = "usd") -> dict:
         coin_data = data[coin_id.lower()]
         currency = vs_currency.lower()
         
-        return {
+        result = {
             "coin": coin_id.lower(),
             "price": coin_data.get(currency),
             "currency": currency.upper(),
@@ -83,6 +117,8 @@ def get_crypto_price(coin_id: str, vs_currency: str = "usd") -> dict:
             "volume_24h": coin_data.get(f"{currency}_24h_vol"),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        _set_cache(cache_key, result)
+        return result
     except Exception as e:
         return {"error": f"Failed to fetch crypto '{coin_id}': {str(e)}"}
 
@@ -99,6 +135,11 @@ def get_crypto_history(coin_id: str, days: int = 30, vs_currency: str = "usd") -
     Returns:
         dict with raw [timestamp_ms, price] pairs and summary metadata
     """
+    cache_key = f"crypto_history:{coin_id.lower()}:{days}:{vs_currency.lower()}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached
+    
     try:
         data = cg.get_coin_market_chart_by_id(
             id=coin_id.lower(),
@@ -109,12 +150,12 @@ def get_crypto_history(coin_id: str, days: int = 30, vs_currency: str = "usd") -
         if not data or "prices" not in data or not data["prices"]:
             return {"error": f"No history found for '{coin_id}'"}
         
-        prices = data["prices"]  # list of [timestamp_ms, price]
+        prices = data["prices"]
         start_price = prices[0][1]
         end_price = prices[-1][1]
         change_pct = ((end_price - start_price) / start_price) * 100 if start_price else 0
         
-        return {
+        result = {
             "coin": coin_id.lower(),
             "currency": vs_currency.upper(),
             "days": days,
@@ -126,6 +167,8 @@ def get_crypto_history(coin_id: str, days: int = 30, vs_currency: str = "usd") -
                 "data_points": len(prices),
             },
         }
+        _set_cache(cache_key, result)
+        return result
     except Exception as e:
         return {"error": f"Failed to fetch crypto history: {str(e)}"}
 
@@ -143,19 +186,26 @@ def get_price_history(ticker: str, period: str = "1mo") -> dict:
     Returns:
         dict with dates and prices, or error
     """
+    cache_key = f"history:{ticker.upper()}:{period}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached
+    
     try:
         data = yf.Ticker(ticker).history(period=period)
         
         if data.empty:
             return {"error": f"No history for '{ticker}'"}
         
-        return {
+        result = {
             "ticker": ticker.upper(),
             "dates": data.index.strftime("%Y-%m-%d").tolist(),
             "prices": data["Close"].round(2).tolist(),
             "volumes": data["Volume"].tolist(),
             "period": period,
         }
+        _set_cache(cache_key, result)
+        return result
     except Exception as e:
         return {"error": f"Failed to fetch history: {str(e)}"}
 
@@ -190,3 +240,10 @@ if __name__ == "__main__":
         print(f"  Change: {s['change_pct']:+.2f}%  ({s['data_points']} data points)")
     else:
         print(f"  Error: {btc_history['error']}")
+    
+    # Cache test
+    print("\n💾 Cache test (second Bitcoin call should be instant):")
+    import time
+    t0 = time.time()
+    get_crypto_price("bitcoin", "usd")
+    print(f"  Second call took: {(time.time() - t0) * 1000:.1f} ms")
